@@ -223,7 +223,7 @@ private:
     std::vector<uint32_t> v_heads;
 
     std::vector<llama_kv_cells> v_cells;
-
+    std::vector<uint32_t> radix_offsets;
     // maps from a sequence id to a stream id
     std::vector<uint32_t> seq_to_stream;
 
