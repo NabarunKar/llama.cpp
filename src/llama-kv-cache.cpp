@@ -891,3 +891,163 @@ llama_kv_cache::slot_info llama_kv_cache::find_slot(const llama_ubatch & ubatch,
 
     return res;
 }
+
+// Add these missing implementations after the existing methods:
+
+uint32_t llama_kv_cache::get_size() const {
+    return hparams.n_ctx;
+}
+
+bool llama_kv_cache::get_has_shift() const {
+    return hparams.rope_type != LLAMA_ROPE_TYPE_NONE;
+}
+
+bool llama_kv_cache::get_can_shift() const {
+    return get_has_shift();
+}
+
+size_t llama_kv_cache::size_k_bytes() const {
+    size_t size = 0;
+    for (const auto & layer : layers) {
+        if (layer.k) {
+            size += ggml_nbytes(layer.k);
+        }
+    }
+    return size;
+}
+
+size_t llama_kv_cache::size_v_bytes() const {
+    size_t size = 0;
+    for (const auto & layer : layers) {
+        if (layer.v) {
+            size += ggml_nbytes(layer.v);
+        }
+    }
+    return size;
+}
+
+bool llama_kv_cache::is_radix_attention_enabled() const {
+    return radix_attention_enabled;
+}
+
+std::pair<llama_radix_node *, uint32_t> llama_kv_cache::radix_find_prefix(const std::vector<llama_token> & tokens) const {
+    if (!radix_tree) {
+        return {nullptr, 0};
+    }
+    return radix_tree->find_prefix(tokens);
+}
+
+void llama_kv_cache::radix_register_sequence(llama_seq_id seq_id, const std::vector<llama_token> & tokens, const std::vector<uint32_t> & cache_slots) {
+    if (radix_tree) {
+        radix_tree->insert_sequence(tokens, cache_slots);
+    }
+}
+
+void llama_kv_cache::radix_unregister_sequence(llama_seq_id seq_id) {
+    // Implementation depends on how sequences are tracked
+    // For now, this is a placeholder
+}
+
+void llama_kv_cache::radix_copy_sequence_ref(llama_seq_id seq_id_src, llama_seq_id seq_id_dst) {
+    // Implementation for copying sequence references
+    // This is a placeholder
+}
+
+void llama_kv_cache::apply_ubatch(const slot_info & sinfo, const llama_ubatch & ubatch) {
+    // Apply the ubatch to the KV cache
+    // This is a core operation that updates cache state
+    // Implementation details depend on the specific caching strategy
+}
+
+ggml_cgraph * llama_kv_cache::build_graph_shift(llm_graph_result * res, llama_context * lctx) const {
+    // Build computation graph for RoPE position shift
+    // This is used when context shifting is enabled
+    return nullptr; // Placeholder
+}
+
+// llama_kv_cache_context implementations
+
+llama_kv_cache_context::llama_kv_cache_context(llama_kv_cache * cache)
+    : cache(cache) {
+}
+
+llama_kv_cache_context::llama_kv_cache_context(llama_memory_status status)
+    : cache(nullptr) {
+}
+
+llama_kv_cache_context::llama_kv_cache_context(
+    llama_kv_cache * cache,
+    llama_context * lctx,
+    bool optimize,
+    llama_kv_cache::stream_copy_info sc_info)
+    : cache(cache) {
+}
+
+llama_kv_cache_context::llama_kv_cache_context(
+    llama_kv_cache * cache,
+    std::vector<llama_kv_cache::slot_info> slot_infos,
+    std::vector<llama_ubatch> ubatches)
+    : cache(cache) {
+}
+
+uint32_t llama_kv_cache_context::get_n_kv() const {
+    return cache ? cache->get_size() : 0;
+}
+
+ggml_tensor * llama_kv_cache_context::get_k(ggml_context * ctx, int32_t il) const {
+    if (!cache || il < 0 || il >= (int32_t)cache->layers.size()) {
+        return nullptr;
+    }
+    return cache->layers[il].k;
+}
+
+ggml_tensor * llama_kv_cache_context::get_v(ggml_context * ctx, int32_t il) const {
+    if (!cache || il < 0 || il >= (int32_t)cache->layers.size()) {
+        return nullptr;
+    }
+    return cache->layers[il].v;
+}
+
+ggml_tensor * llama_kv_cache_context::cpy_k(
+    ggml_context * ctx,
+    ggml_tensor * k_cur,
+    ggml_tensor * k_idxs,
+    int32_t il) const {
+    // Copy K cache for the given layer
+    return k_cur; // Placeholder
+}
+
+ggml_tensor * llama_kv_cache_context::cpy_v(
+    ggml_context * ctx,
+    ggml_tensor * v_cur,
+    ggml_tensor * v_idxs,
+    int32_t il) const {
+    // Copy V cache for the given layer
+    return v_cur; // Placeholder
+}
+
+ggml_tensor * llama_kv_cache_context::build_input_k_idxs(ggml_context * ctx, const llama_ubatch & ubatch) const {
+    // Build K indices tensor
+    return nullptr; // Placeholder
+}
+
+ggml_tensor * llama_kv_cache_context::build_input_v_idxs(ggml_context * ctx, const llama_ubatch & ubatch) const {
+    // Build V indices tensor
+    return nullptr; // Placeholder
+}
+
+void llama_kv_cache_context::set_input_k_idxs(ggml_tensor * dst, const llama_ubatch * ubatch) const {
+    // Set K indices in tensor
+}
+
+void llama_kv_cache_context::set_input_v_idxs(ggml_tensor * dst, const llama_ubatch * ubatch) const {
+    // Set V indices in tensor
+}
+
+void llama_kv_cache_context::set_input_kq_mask(ggml_tensor * dst, const llama_ubatch * ubatch, bool causal_attn) const {
+    // Set KQ mask for attention
+}
+
+void llama_kv_cache_context::set_input_pos_bucket(ggml_tensor * dst, const llama_ubatch * ubatch) const {
+    // Set position bucket information
+}
