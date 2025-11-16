@@ -1,9 +1,13 @@
 #pragma once
 
 #include "llama.h"
-#include <memory>
-#include <unordered_map>
+#include "llama-impl.h"
+
+#include <cstdint>
 #include <vector>
+#include <unordered_map>
+#include <memory>
+#include <algorithm>
 
 // Forward declarations
 //
