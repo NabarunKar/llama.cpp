@@ -125,3 +125,15 @@ void llama_radix_tree::collect_evictable_nodes(
         collect_evictable_nodes(child.get(), nodes);
     }
 }
+
+void llama_radix_tree::increment_node_ref(llama_radix_node * node) {
+    if (!node || node == root.get()) {
+        return;
+    }
+    
+    node->inc_ref();
+    node->touch(tick());
+    
+    LLAMA_LOG_DEBUG("%s: incremented ref count for node (depth=%u, ref_count=%u)\n",
+        __func__, node->depth, node->ref_count);
+}

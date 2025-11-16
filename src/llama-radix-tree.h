@@ -80,10 +80,20 @@ struct llama_radix_node {
 //
 // Radix Tree for managing shared prefixes
 //
+// Current limitations:
+// - Single-stream mode only (unified KV cache)
+// - All cache slots belong to stream 0
+//
+// Future enhancements for multi-stream support:
+// - Per-stream radix trees
+// - Stream-aware cache slot allocation
+// - Cross-stream prefix sharing
+//
 class llama_radix_tree {
 public:
-    explicit llama_radix_tree(uint32_t n_layers) : n_layers(n_layers) {
+    explicit llama_radix_tree(uint32_t n_layers) : n_layers(n_layers), current_time(0) {
         root = std::make_unique<llama_radix_node>();
+        root->token = -1; // Special marker for root
     }
 
     // Find the longest matching prefix for a given token sequence
@@ -95,6 +105,9 @@ public:
     llama_radix_node * insert_sequence(
         const std::vector<llama_token> & tokens,
         const std::vector<uint32_t> & cache_slots);
+    
+    // Phase 3.2: Increment reference on existing node (for seq_cp)
+    void increment_node_ref(llama_radix_node * node);
     
     // Remove a sequence from the tree (decrement ref counts)
     void remove_sequence(const std::vector<llama_token> & tokens);
@@ -109,6 +122,13 @@ public:
     // Increment global time counter
     uint64_t tick() { return ++current_time; }
     
+    // Phase 3.3: Multi-stream support (future)
+    // Currently returns 0 (single stream), can be extended later
+    uint32_t get_stream_for_node(const llama_radix_node * node) const {
+        GGML_UNUSED(node);
+        return 0; // Always stream 0 in unified mode
+    }
+    
     // Get total number of nodes in the tree
     size_t get_node_count() const;
     
@@ -116,9 +136,13 @@ public:
     size_t get_cached_token_count() const;
     
 private:
-    std::shared_ptr<llama_radix_node> root;
+    std::unique_ptr<llama_radix_node> root;
     uint32_t n_layers; // Number of layers in the model (used for cache_slots sizing)
     uint64_t current_time;
+    
+    // Phase 3.3: Future multi-stream support
+    // std::vector<std::unique_ptr<llama_radix_node>> stream_roots; // One root per stream
+    // std::unordered_map<llama_radix_node *, uint32_t> node_to_stream; // Track node ownership
     
     // Helper function to recursively count nodes
     size_t count_nodes(const llama_radix_node * node) const;
