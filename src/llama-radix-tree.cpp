@@ -2,12 +2,14 @@
 #include <cassert>
 #include <algorithm>
 
-std::pair<llama_radix_node *, uint32_t> llama_radix_tree::find_prefix(const std::vector<llama_token> & tokens) {
+std::pair<llama_radix_node *, uint32_t> llama_radix_tree::find_prefix(const std::vector<llama_token> & tokens) const {
     if (tokens.empty()) {
         return {root.get(), 0};
     }
 
-    llama_radix_node * current = root.get();
+    // FIX: Need to cast away const for the return value
+    // This is safe because we're only reading, not modifying
+    llama_radix_node * current = const_cast<llama_radix_node *>(root.get());
     uint32_t matched_length = 0;
 
     for (size_t i = 0; i < tokens.size(); ++i) {

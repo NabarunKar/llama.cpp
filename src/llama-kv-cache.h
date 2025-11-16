@@ -271,7 +271,7 @@ private:
     bool is_radix_attention_enabled() const;
     void radix_register_sequence(llama_seq_id seq_id, const std::vector<llama_token> & tokens, const std::vector<uint32_t> & cache_slots);
     void radix_unregister_sequence(llama_seq_id seq_id);
-    std::pair<llama_radix_node *, uint32_t> radix_find_prefix(const std::vector<llama_token> & tokens);
+    std::pair<llama_radix_node *, uint32_t> radix_find_prefix(const std::vector<llama_token> & tokens) const;
     
     // Phase 3.2: Track sequence to radix node mapping for efficient seq_cp
     void radix_copy_sequence_ref(llama_seq_id seq_id_src, llama_seq_id seq_id_dst);

@@ -347,7 +347,6 @@ void llama_kv_cache::seq_cp(llama_seq_id seq_id_src, llama_seq_id seq_id_dst, ll
         
         // Try to find if source sequence exists in radix tree
         // by checking if any node has cache slots matching the source cells
-        llama_radix_node * src_node = nullptr;
         std::vector<uint32_t> src_cache_slots;
         
         // Collect cache slot indices from source sequence
@@ -773,11 +772,9 @@ bool llama_kv_cache::update(llama_context * lctx, bool do_shift, const stream_co
     radix_offsets.resize(layers.size(), 0);
 
     for (size_t il = 0; il < layers.size(); ++il) {
-        const auto & layer = layers[il];
-
         // For now, simple example: store the first stream head
         if (!v_heads.empty()) {
-            radix_offsets[il] = v_heads[0];  // replace this later with RadixAttention logic
+            radix_offsets[il] = v_heads[0];
         }
     }
 
@@ -785,72 +782,6 @@ bool llama_kv_cache::update(llama_context * lctx, bool do_shift, const stream_co
 }
 
 llama_kv_cache::slot_info llama_kv_cache::find_slot(const llama_ubatch & ubatch, bool cont) const {
-
-    if (debug > 0) {
-        for (uint32_t s = 0; s < ubatch.n_seqs_unq; ++s) {
-            const auto seq_id = ubatch.seq_id_unq[s];
-            const auto stream_id = seq_to_stream[seq_id];
-            const auto & cells = v_cells[stream_id];
-            const uint32_t head_cur = v_heads[stream_id];
-
-            LLAMA_LOG_DEBUG("%s: stream[%d], n = %5d, used = %5d, head = %5d, size = %5d, n_swa = %5d\n",
-                    __func__, stream_id, cells.used_max_p1(), cells.get_used(), head_cur, get_size(), n_swa);
-
-            if ((debug == 2 && n_swa > 0) || debug > 2) {
-                std::string ss;
-                for (uint32_t i = 0; i < cells.size(); ++i) {
-                    if (cells.is_empty(i)) {
-                        ss += '.';
-                    } else {
-                        assert(cells.seq_count(i) >= 1);
-
-                        if (cells.seq_count(i) == 1) {
-                            ss += std::to_string(cells.seq_get(i));
-                        } else {
-                            ss += 'M';
-                        }
-                    }
-                    if (i%256 == 255) {
-                        ss += " *";
-                        ss += '\n';
-                    }
-                }
-                LLAMA_LOG_DEBUG("\n%s\n", ss.c_str());
-            }
-
-            if ((debug == 2 && n_swa > 0) || debug > 2) {
-                std::string ss;
-                for (uint32_t i = 0; i < cells.size(); ++i) {
-                    std::string cur;
-                    if (cells.is_empty(i)) {
-                        cur = '.';
-                    } else {
-                        cur = std::to_string(cells.pos_get(i));
-                    }
-                    const int n = cur.size();
-                    for (int j = 0; j < 5 - n; ++j) {
-                        cur += ' ';
-                    }
-                    ss += cur;
-                    if (i%256 == 255) {
-                        ss += " *";
-                    }
-                    if (i%64 == 63) {
-                        ss += '\n';
-                    }
-                }
-                LLAMA_LOG_DEBUG("\n%s\n", ss.c_str());
-            }
-
-            for (int s = 0; s < LLAMA_MAX_SEQ; ++s) {
-                if (cells.seq_pos_min(s) < 0) {
-                    continue;
-                }
-
-                LLAMA_LOG_DEBUG("%s: stream[%d] min[%d] = %5d, max[%d] = %5d\n", __func__, stream_id, s, cells.seq_pos_min(s), s, cells.seq_pos_max(s));
-            }
-        }
-    }
 
     uint32_t n_tokens = ubatch.n_tokens;
     uint32_t n_seqs   = 1;
@@ -906,65 +837,66 @@ llama_kv_cache::slot_info llama_kv_cache::find_slot(const llama_ubatch & ubatch,
 
                 // Reuse cache slots from the prefix
                 const auto & cached_slots = prefix_node->cache_slots;
-
-                for (uint32_t i = 0; i < std::min(prefix_len, n_tokens); ++i) {
-                    // Copy the first min(prefix_len, n_tokens) slots
-                    res.idxs[i] = cached_slots[i];
-                }
-
-                // Fill remaining slots if any
-                for (uint32_t i = prefix_len; i < n_tokens; ++i) {
-                    res.idxs[i] = ubatch.n_seqs_unq + i;
-                }
-
-                LLAMA_LOG_DEBUG("%s: RadixAttention: reused slots: %s\n", __func__, llama_seq_ids_to_str(res.idxs).c_str());
                 
-                return res;
-            }
+                // FIX: Allocate the vector properly
+                res.idxs[0].clear();
+                res.idxs[0].reserve(n_tokens);
+                
+                // Copy the cached slots for the prefix
+                const auto n_reuse = std::min(prefix_len, n_tokens);
+                for (uint32_t i = 0; i < n_reuse; ++i) {
+                    // FIX: Push individual slot indices, not the whole vector
+                    if (i < cached_slots.size()) {
+                        res.idxs[0].push_back(cached_slots[i]);
+                    }
+                }
+                
+                // Allocate new slots for remaining tokens
+                const auto & cells = v_cells[res.strm[0]];
+                for (uint32_t i = n_reuse; i < n_tokens; ++i) {
+                    // FIX: Push individual indices
+                    res.idxs[0].push_back(cells.used_max_p1() + (i - n_reuse));
+                }
+                
+                // FIX: Use simpler debug message
+                LLAMA_LOG_DEBUG("%s: RadixAttention: reused %u slots, allocated %u new slots\n", 
+                    __func__, n_reuse, n_tokens - n_reuse);
+                
+        /*.strm =*/ { },
+        /*.idxs =*/ { },
+    };
+ return with the allocated slots
+    res.resize(n_seqs);es;
+      }
+    // ==================================================        }
+    // Phase 2.6 & 3.3: RadixAttention prefix reuse
+    // ==================================================    // ==================================================
+    if (is_radix_attention_enabled() && n_seqs == 1) {
+        // Verify we're in single-stream mode======
+        GGML_ASSERT(n_stream == 1 && "RadixAttention requires unified (single-stream) mode");
+        
+        // Extract tokens from ubatch for radix tree lookup[s];
+        std::vector<llama_token> tokens;
+        tokens.reserve(n_tokens);res.s0 = std::min<uint32_t>(res.s0, seq_to_stream[seq_id]);
+        eq_id]);
+        for (uint32_t i = 0; i < n_tokens; ++i) {id];
+            if (ubatch.token) {
+                tokens.push_back(ubatch.token[i]);const auto & cells = v_cells[res.strm[s]];
+            }];
         }
-    }
-    // ==================================================
-    // End of RadixAttention prefix reuse
-    // ==================================================
 
-    for (uint32_t s = 0; s < n_stream; ++s) {
-        auto & cells = v_cells[s];
+        if (!tokens.empty()) {dxs[s].clear();
+            // Search radix tree for matching prefixes.idxs[s].reserve(n_tokens);
+            auto [prefix_node, prefix_len] = radix_find_prefix(tokens);        
+ < n_tokens; ++i) {
+            if (prefix_len > 0 && prefix_node && !prefix_node->cache_slots.empty()) {) + i);
+                // We found a cached prefix!
+                const auto seq_id = ubatch.seq_id_unq[0];
+                res.s0 = std::min<uint32_t>(res.s0, seq_to_stream[seq_id]);
+                res.s1 = std::max<uint32_t>(res.s1, seq_to_stream[seq_id]); res.idxs which doesn't make sense here
+                res.strm[0] = seq_to_stream[seq_id];
+                
+                GGML_ASSERT(res.strm[0] == 0 && "RadixAttention expects stream 0 in unified mode");
 
-        bool range_free = true;
-
-        // check if the range is free
-        for (uint32_t i = 0; i < n_seqs; ++i) {
-            if (!cells.is_empty(cells.used_max_p1() + i)) {
-                range_free = false;
-                break;
-            }
-        }
-
-        if (range_free) {
-            // found a free range
-            for (uint32_t i = 0; i < n_seqs; ++i) {
-                res.idxs[i] = cells.used_max_p1() + i;
-            }
-
-            res.s0 = std::min(res.s0, s);
-            res.s1 = std::max(res.s1, s);
-
-            break;
-        }
-    }
-
-    // update the cells' metadata
-    for (uint32_t s = 0; s < n_stream; ++s) {
-        if (s < res.s0 || s > res.s1) {
-            continue;
-        }
-
-        auto & cells = v_cells[s];
-
-        for (uint32_t i = 0; i < n_seqs; ++i) {
-            cells.set(res.idxs, llama_kv_cell_ext{});
-        }
-    }
-
-    return {};
-}
+                LLAMA_LOG_DEBUG("%s: RadixAttention: found cached prefix of length %u/%u\n", 
+                    __func__, prefix_len, n_tokens);                // Reuse cache slots from the prefix                const auto & cached_slots = prefix_node->cache_slots;                for (uint32_t i = 0; i < std::min(prefix_len, n_tokens); ++i) {                    // Copy the first min(prefix_len, n_tokens) slots                    res.idxs[i] = cached_slots[i];                }                // Fill remaining slots if any                for (uint32_t i = prefix_len; i < n_tokens; ++i) {                    res.idxs[i] = ubatch.n_seqs_unq + i;                }                LLAMA_LOG_DEBUG("%s: RadixAttention: reused slots: %s\n", __func__, llama_seq_ids_to_str(res.idxs).c_str());                                return res;            }        }    }    // ==================================================    // End of RadixAttention prefix reuse    // ==================================================    for (uint32_t s = 0; s < n_stream; ++s) {        auto & cells = v_cells[s];        bool range_free = true;        // check if the range is free        for (uint32_t i = 0; i < n_seqs; ++i) {            if (!cells.is_empty(cells.used_max_p1() + i)) {                range_free = false;                break;            }        }        if (range_free) {            // found a free range            for (uint32_t i = 0; i < n_seqs; ++i) {                res.idxs[i] = cells.used_max_p1() + i;            }            res.s0 = std::min(res.s0, s);            res.s1 = std::max(res.s1, s);            break;        }    }    // update the cells' metadata    for (uint32_t s = 0; s < n_stream; ++s) {        if (s < res.s0 || s > res.s1) {            continue;        }        auto & cells = v_cells[s];        for (uint32_t i = 0; i < n_seqs; ++i) {            cells.set(res.idxs, llama_kv_cell_ext{});        }    }    return {};}

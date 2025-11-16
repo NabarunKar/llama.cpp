@@ -37,8 +37,8 @@ struct llama_radix_node {
     // Lock status - true if this node's cache slots are immutable
     bool locked = false;
     
-    // Constructor
-    llama_radix_node() : ref_count(1), parent(nullptr), token(0), last_access_time(0) {}
+    // Constructor - fixed initialization order
+    llama_radix_node() : token(-1), ref_count(1), last_access_time(0), parent(nullptr) {}
     
     // Get the full token sequence from root to this node
     std::vector<llama_token> get_token_sequence() const {
@@ -98,7 +98,7 @@ public:
 
     // Find the longest matching prefix for a given token sequence
     // Returns the node representing the longest matching prefix
-    std::pair<llama_radix_node *, uint32_t> find_prefix(const std::vector<llama_token> & tokens);
+    std::pair<llama_radix_node *, uint32_t> find_prefix(const std::vector<llama_token> & tokens) const;
     
     // Insert a new sequence into the tree
     // Returns the newly created or existing node for this sequence
