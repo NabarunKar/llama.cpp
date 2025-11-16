@@ -4,6 +4,7 @@
 #include "llama-graph.h"
 #include "llama-kv-cells.h"
 #include "llama-memory.h"
+#include "llama-radix-tree.h"
 
 #include <unordered_map>
 #include <vector>
@@ -224,16 +225,15 @@ private:
 
     std::vector<llama_kv_cells> v_cells;
     std::vector<uint32_t> radix_offsets;
-    // maps from a sequence id to a stream id
     std::vector<uint32_t> seq_to_stream;
-
-    // pending stream copies that will be applied during the next update
     stream_copy_info sc_info;
 
     std::vector<kv_layer> layers;
-
-    // model layer id -> KV cache layer id
     std::unordered_map<int32_t, int32_t> map_layer_ids;
+
+    // RadixAttention support
+    bool radix_attention_enabled = false;
+    std::unique_ptr<llama_radix_tree> radix_tree;
 
     size_t total_size() const;
 
@@ -266,6 +266,12 @@ private:
 
     bool state_read_meta(llama_io_read_i & io, uint32_t strm, uint32_t cell_count, llama_seq_id dest_seq_id = -1);
     bool state_read_data(llama_io_read_i & io, uint32_t strm, uint32_t cell_count);
+
+    // RadixAttention helper methods
+    bool is_radix_attention_enabled() const;
+    void radix_register_sequence(llama_seq_id seq_id, const std::vector<llama_token> & tokens, const std::vector<uint32_t> & cache_slots);
+    void radix_unregister_sequence(llama_seq_id seq_id);
+    std::pair<llama_radix_node *, uint32_t> radix_find_prefix(const std::vector<llama_token> & tokens);
 };
 
 class llama_kv_cache_context : public llama_memory_context_i {

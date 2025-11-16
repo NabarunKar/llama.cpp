@@ -4,6 +4,7 @@
 #include "llama-io.h"
 #include "llama-model.h"
 #include "llama-context.h"
+#include "llama-radix-tree.h"
 
 #include <algorithm>
 #include <cassert>
@@ -205,6 +206,16 @@ llama_kv_cache::llama_kv_cache(
 
     const char * LLAMA_KV_CACHE_DEBUG = getenv("LLAMA_KV_CACHE_DEBUG");
     debug = LLAMA_KV_CACHE_DEBUG ? atoi(LLAMA_KV_CACHE_DEBUG) : 0;
+
+    // Initialize RadixAttention if enabled
+    const char * LLAMA_RADIX_ATTENTION = getenv("LLAMA_RADIX_ATTENTION");
+    radix_attention_enabled = LLAMA_RADIX_ATTENTION ? (atoi(LLAMA_RADIX_ATTENTION) != 0) : false;
+
+    if (radix_attention_enabled) {
+        const uint32_t n_layer_kv = hparams.n_layer_kv();
+        radix_tree = std::make_unique<llama_radix_tree>(n_layer_kv);
+        LLAMA_LOG_INFO("%s: RadixAttention enabled (n_layers = %u)\n", __func__, n_layer_kv);
+    }
 }
 
 void llama_kv_cache::clear(bool data) {
@@ -218,6 +229,12 @@ void llama_kv_cache::clear(bool data) {
             ggml_backend_buffer_clear(buf.get(), 0);
         }
     }
+
+    // Reset radix tree
+    if (radix_tree) {
+        radix_tree = std::make_unique<llama_radix_tree>(hparams.n_layer_kv());
+        LLAMA_LOG_DEBUG("%s: radix tree reset\n", __func__);
+    }
 }
 
 bool llama_kv_cache::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos p1) {
@@ -229,6 +246,11 @@ bool llama_kv_cache::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos p1) {
 
     if (p1 < 0) {
         p1 = std::numeric_limits<llama_pos>::max();
+    }
+
+    // Unregister from radix tree if removing entire sequence
+    if (radix_tree && seq_id >= 0 && p0 == 0 && p1 == std::numeric_limits<llama_pos>::max()) {
+        radix_unregister_sequence(seq_id);
     }
 
     if (seq_id >= 0) {
@@ -1952,127 +1974,40 @@ bool llama_kv_cache::state_read_data(llama_io_read_i & io, uint32_t strm, uint32
     return true;
 }
 
-//
-// llama_kv_cache_context
-//
-
-llama_kv_cache_context::llama_kv_cache_context(llama_memory_status status) : status(status) {}
-
-llama_kv_cache_context::llama_kv_cache_context(
-        llama_kv_cache * kv) : status(LLAMA_MEMORY_STATUS_SUCCESS), kv(kv) {
-    n_kv = kv->get_size();
-
-    const uint32_t n_stream = kv->get_n_stream();
-
-    // create a dummy slot info - the actual data is irrelevant. we just need to build the graph
-    sinfos.resize(1);
-    sinfos[0].s0 = 0;
-    sinfos[0].s1 = n_stream - 1;
-    sinfos[0].idxs.resize(n_stream);
-    for (uint32_t s = 0; s < n_stream; ++s) {
-        sinfos[0].strm.push_back(s);
-        sinfos[0].idxs[s].resize(1, 0);
-    }
+// RadixAttention helper methods
+bool llama_kv_cache::is_radix_attention_enabled() const {
+    return radix_attention_enabled && radix_tree != nullptr;
 }
 
-llama_kv_cache_context::llama_kv_cache_context(
-        llama_kv_cache * kv,
-        llama_context * lctx,
-        bool do_shift,
-        stream_copy_info sc_info) : status(LLAMA_MEMORY_STATUS_SUCCESS), kv(kv), lctx(lctx), do_shift(do_shift), sc_info(std::move(sc_info)) {
-    if (!do_shift && this->sc_info.empty()) {
-        status = LLAMA_MEMORY_STATUS_NO_UPDATE;
-    }
-}
+void llama_kv_cache::radix_register_sequence(
+    llama_seq_id seq_id,
+    const std::vector<llama_token> & tokens,
+    const std::vector<uint32_t> & cache_slots) {
 
-llama_kv_cache_context::llama_kv_cache_context(
-        llama_kv_cache * kv,
-        llama_kv_cache::slot_info_vec_t sinfos,
-        std::vector<llama_ubatch> ubatches) : status(LLAMA_MEMORY_STATUS_SUCCESS), kv(kv), sinfos(std::move(sinfos)), ubatches(std::move(ubatches)) {
-}
-
-llama_kv_cache_context::~llama_kv_cache_context() = default;
-
-bool llama_kv_cache_context::next() {
-    assert(status == LLAMA_MEMORY_STATUS_SUCCESS);
-
-    if (++i_cur >= ubatches.size()) {
-        return false;
+    if (!is_radix_attention_enabled()) {
+        return;
     }
 
-    return true;
+    radix_tree->insert_sequence(tokens, cache_slots);
+    LLAMA_LOG_DEBUG("%s: registered sequence %d with %zu tokens\n", __func__, seq_id, tokens.size());
 }
 
-bool llama_kv_cache_context::apply() {
-    assert(!llama_memory_status_is_fail(status));
-
-    // no ubatches -> this is a KV cache update
-    if (ubatches.empty()) {
-        kv->update(lctx, do_shift, sc_info);
-
-        return true;
+void llama_kv_cache::radix_unregister_sequence(llama_seq_id seq_id) {
+    if (!is_radix_attention_enabled()) {
+        return;
     }
 
-    kv->apply_ubatch(sinfos[i_cur], ubatches[i_cur]);
-    n_kv = kv->get_n_kv(sinfos[i_cur]);
-
-    return true;
+    // TODO: In Phase 3, we'll need to track seq_id → tokens mapping to properly remove sequences
+    // For now, this is a placeholder
+    LLAMA_LOG_DEBUG("%s: unregistered sequence %d (placeholder)\n", __func__, seq_id);
 }
 
-llama_memory_status llama_kv_cache_context::get_status() const {
-    return status;
-}
+std::pair<llama_radix_node *, uint32_t> llama_kv_cache::radix_find_prefix(
+    const std::vector<llama_token> & tokens) {
 
-const llama_ubatch & llama_kv_cache_context::get_ubatch() const {
-    assert(status == LLAMA_MEMORY_STATUS_SUCCESS);
+    if (!is_radix_attention_enabled()) {
+        return {nullptr, 0};
+    }
 
-    return ubatches[i_cur];
-}
-
-uint32_t llama_kv_cache_context::get_n_kv() const {
-    return n_kv;
-}
-
-ggml_tensor * llama_kv_cache_context::get_k(ggml_context * ctx, int32_t il) const {
-    return kv->get_k(ctx, il, n_kv, sinfos[i_cur]);
-}
-
-ggml_tensor * llama_kv_cache_context::get_v(ggml_context * ctx, int32_t il) const {
-    return kv->get_v(ctx, il, n_kv, sinfos[i_cur]);
-}
-
-ggml_tensor * llama_kv_cache_context::cpy_k(ggml_context * ctx, ggml_tensor * k_cur, ggml_tensor * k_idxs, int32_t il) const {
-    return kv->cpy_k(ctx, k_cur, k_idxs, il, sinfos[i_cur]);
-}
-
-ggml_tensor * llama_kv_cache_context::cpy_v(ggml_context * ctx, ggml_tensor * v_cur, ggml_tensor * v_idxs, int32_t il) const {
-    return kv->cpy_v(ctx, v_cur, v_idxs, il, sinfos[i_cur]);
-}
-
-ggml_tensor * llama_kv_cache_context::build_input_k_idxs(ggml_context * ctx, const llama_ubatch & ubatch) const {
-    return kv->build_input_k_idxs(ctx, ubatch);
-}
-
-ggml_tensor * llama_kv_cache_context::build_input_v_idxs(ggml_context * ctx, const llama_ubatch & ubatch) const {
-    return kv->build_input_v_idxs(ctx, ubatch);
-}
-
-void llama_kv_cache_context::set_input_k_shift(ggml_tensor * dst) const {
-    kv->set_input_k_shift(dst);
-}
-
-void llama_kv_cache_context::set_input_k_idxs(ggml_tensor * dst, const llama_ubatch * ubatch) const {
-    kv->set_input_k_idxs(dst, ubatch, sinfos[i_cur]);
-}
-
-void llama_kv_cache_context::set_input_v_idxs(ggml_tensor * dst, const llama_ubatch * ubatch) const {
-    kv->set_input_v_idxs(dst, ubatch, sinfos[i_cur]);
-}
-
-void llama_kv_cache_context::set_input_kq_mask(ggml_tensor * dst, const llama_ubatch * ubatch, bool causal_attn) const {
-    kv->set_input_kq_mask(dst, ubatch, causal_attn);
-}
-
-void llama_kv_cache_context::set_input_pos_bucket(ggml_tensor * dst, const llama_ubatch * ubatch) const {
-    kv->set_input_pos_bucket(dst, ubatch);
+    return radix_tree->find_prefix(tokens);
 }
